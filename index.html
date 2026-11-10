@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>海戦バトルシップ隠し艦隊狩りゲーム</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#0a1628; }
+  .cell {
+    width:36px; height:36px; border:1px solid rgba(100,180,255,0.2);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; font-size:16px; transition:background 0.2s;
+    background:rgba(10,30,60,0.6);
+    user-select:none;
+  }
+  .cell:hover { background:rgba(0,120,200,0.3); }
+  .cell.hit { background:rgba(220,50,50,0.5) !important; cursor:default; }
+  .cell.miss { background:rgba(30,60,100,0.5) !important; cursor:default; }
+  .cell.sunk { background:rgba(200,50,20,0.7) !important; cursor:default; }
+  .cell.ship { background:rgba(80,120,180,0.4); }
+  .cell.placing { background:rgba(100,200,100,0.3); }
+  .cell.placing-invalid { background:rgba(200,100,100,0.3); }
+  .cell.reveal { background:rgba(100,180,80,0.3) !important; cursor:default; }
+  .cell.heatmap-low { background:rgba(0,60,120,0.4); }
+  .cell.heatmap-mid { background:rgba(0,100,200,0.4); }
+  .cell.heatmap-high { background:rgba(0,160,255,0.5); }
+  .ship-btn { transition:all 0.2s; }
+  .ship-btn.selected { border-color:#60a5fa; background:rgba(96,165,250,0.2); }
+  .ship-btn.placed { border-color:#4ade80; background:rgba(74,222,128,0.1); opacity:0.5; }
+  @keyframes fadeIn { from{opacity:0;transform:scale(0.9)} to{opacity:1;transform:scale(1)} }
+  .msg-anim { animation: fadeIn 0.3s; }
+</style>
+</head>
+<body class="min-h-screen text-blue-100 py-4 px-2">
+
+<div class="max-w-5xl mx-auto">
+  <h1 class="text-2xl font-bold text-center text-blue-300 mb-1">🚢 海戦バトルシップ</h1>
+  <p class="text-center text-xs text-blue-500 mb-4">CPU艦隊を全滅させろ！</p>
+
+  <!-- ステータスバー -->
+  <div class="flex justify-center gap-6 mb-4 text-sm">
+    <div class="bg-blue-900/40 border border-blue-700/40 rounded-lg px-4 py-2 text-center">
+      <div class="text-xs text-blue-400">勝利数</div>
+      <div id="wins" class="text-xl font-bold text-green-300">0</div>
+    </div>
+    <div class="bg-blue-900/40 border border-blue-700/40 rounded-lg px-4 py-2 text-center">
+      <div class="text-xs text-blue-400">敗北数</div>
+      <div id="losses" class="text-xl font-bold text-red-400">0</div>
+    </div>
+    <div class="bg-blue-900/40 border border-blue-700/40 rounded-lg px-4 py-2 text-center">
+      <div class="text-xs text-blue-400">フェーズ</div>
+      <div id="phaseLabel" class="text-lg font-bold text-cyan-300">配置</div>
+    </div>
+    <div class="bg-blue-900/40 border border-blue-700/40 rounded-lg px-4 py-2 text-center">
+      <div class="text-xs text-blue-400">残艦隻（敵）</div>
+      <div id="enemyShips" class="text-xl font-bold text-orange-300">5</div>
+    </div>
+  </div>
+
+  <div id="messageArea" class="text-center text-sm font-semibold mb-3 h-6 text-yellow-300"></div>
+
+  <div class="flex flex-col lg:flex-row gap-6 justify-center">
+    <!-- プレイヤーグリッド -->
+    <div>
+      <h2 class="text-sm text-blue-400 font-semibold mb-2 text-center">🛡️ 自軍海域</h2>
+      <div id="playerGrid" class="inline-grid gap-0 border border-blue-800/40"></div>
+    </div>
+
+    <!-- 中央コントロール -->
+    <div class="flex flex-col gap-3 justify-center min-w-40">
+      <div id="placeControls" class="space-y-2">
+        <p class="text-xs text-blue-400 text-center font-semibold">艦を配置</p>
+        <div id="shipList" class="space-y-1"></div>
+        <div class="flex gap-2">
+          <button id="btnRotate" onclick="toggleRotate()" class="flex-1 bg-gray-700 hover:bg-gray-600 text-xs py-2 rounded transition">🔄 回転</button>
+          <button onclick="randomPlace()" class="flex-1 bg-indigo-700 hover:bg-indigo-600 text-xs py-2 rounded transition">🎲 ランダム</button>
+        </div>
+        <button id="btnStartBattle" onclick="startBattle()" disabled class="w-full bg-green-600 hover:bg-green-500 disabled:opacity-30 text-white text-sm py-2 rounded-lg transition font-semibold">⚔️ 戦闘開始</button>
+      </div>
+      <div id="battleControls" class="space-y-2 hidden">
+        <p id="turnLabel" class="text-xs text-blue-400 text-center font-semibold">あなたのターン</p>
+        <div class="text-xs text-blue-500 text-center">敵海域をクリック</div>
+        <label class="flex items-center gap-2 text-xs text-blue-400 cursor-pointer">
+          <input type="checkbox" id="showHeat" onchange="toggleHeatmap()" class="accent-blue-400"> ヒートマップ表示
+        </label>
+        <button onclick="newGame()" class="w-full bg-gray-700 hover:bg-gray-600 text-xs py-2 rounded transition">🔁 新しいゲーム</button>
+      </div>
+    </div>
+
+    <!-- 敵グリッド -->
+    <div>
+      <h2 class="text-sm text-red-400 font-semibold mb-2 text-center">⚔️ 敵軍海域</h2>
+      <div id="enemyGrid" class="inline-grid gap-0 border border-red-800/40"></div>
+    </div>
+  </div>
+
+  <!-- 艦種凡例 -->
+  <div class="mt-4 flex flex-wrap gap-3 justify-center text-xs text-blue-400">
+    <span>🚢 空母(5)</span><span>⚓ 戦艦(4)</span><span>🛥️ 駆逐艦(3)</span><span>🤿 潜水艦(3)</span><span>🚤 哨戒艦(2)</span>
+    <span class="ml-2">🔴 命中</span><span>🔵 ミス</span>
+  </div>
+</div>
+
+<!-- 勝敗モーダル -->
+<div id="modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+  <div class="bg-gray-900 border border-blue-600 rounded-2xl p-8 text-center max-w-xs mx-4 msg-anim">
+    <div id="modalIcon" class="text-5xl mb-3"></div>
+    <h2 id="modalTitle" class="text-2xl font-bold mb-2"></h2>
+    <p id="modalMsg" class="text-sm text-blue-400 mb-4"></p>
+    <button onclick="newGame()" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-lg transition">もう一度</button>
+  </div>
+</div>
+
+<script>
+const GRID = 10;
+const SHIPS = [
+  { name:'空母', emoji:'🚢', size:5 },
+  { name:'戦艦', emoji:'⚓', size:4 },
+  { name:'駆逐艦', emoji:'🛥️', size:3 },
+  { name:'潜水艦', emoji:'🤿', size:3 },
+  { name:'哨戒艦', emoji:'🚤', size:2 },
+];
+
+let phase = 'place';
+let isHorizontal = true;
+let selectedShipIdx = 0;
+let playerBoard = Array.from({length:GRID},()=>Array(GRID).fill(0));
+let enemyBoard = Array.from({length:GRID},()=>Array(GRID).fill(0));
+let playerHits = Array.from({length:GRID},()=>Array(GRID).fill(0));
+let enemyHits = Array.from({length:GRID},()=>Array(GRID).fill(0));
+let placedShips = [];
+let playerPlacedShips = [];
+let heatmap = Array.from({length:GRID},()=>Array(GRID).fill(0));
+let showHeat = false;
+let gameOver = false;
+let wins = parseInt(localStorage.getItem('bs_wins')||'0');
+let losses = parseInt(localStorage.getItem('bs_losses')||'0');
+let playerTurn = true;
+
+function saveStats() {
+  localStorage.setItem('bs_wins', wins);
+  localStorage.setItem('bs_losses', losses);
+}
+
+function updateStats() {
+  document.getElementById('wins').textContent = wins;
+  document.getElementById('losses').textContent = losses;
+}
+updateStats();
+
+// グリッド生成
+function buildGrid(containerId, clickFn) {
+  const c = document.getElementById(containerId);
+  c.style.gridTemplateColumns = `repeat(${GRID},36px)`;
+  c.innerHTML = '';
+  const labels = ['A','B','C','D','E','F','G','H','I','J'];
+  for (let r = 0; r < GRID; r++) {
+    for (let col = 0; col < GRID; col++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.id = `${containerId}-${r}-${col}`;
+      cell.setAttribute('title', `${labels[r]}${col+1}`);
+      if (clickFn) cell.onclick = () => clickFn(r, col);
+      c.appendChild(cell);
+    }
+  }
+}
+
+function getCell(id, r, c) { return document.getElementById(`${id}-${r}-${c}`); }
+
+function renderPlayerBoard() {
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const cell = getCell('playerGrid', r, c);
+      cell.className = 'cell';
+      cell.textContent = '';
+      if (playerBoard[r][c]) cell.classList.add('ship');
+      if (enemyHits[r][c] === 1) { cell.classList.add('hit'); cell.textContent = '×'; }
+      if (enemyHits[r][c] === 2) { cell.classList.add('miss'); cell.textContent = '○'; }
+    }
+  }
+}
+
+function renderEnemyBoard() {
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const cell = getCell('enemyGrid', r, c);
+      cell.className = 'cell';
+      cell.textContent = '';
+      if (playerHits[r][c] === 1) { cell.classList.add('hit'); cell.textContent = '×'; }
+      else if (playerHits[r][c] === 2) { cell.classList.add('miss'); cell.textContent = '○'; }
+      else if (showHeat && heatmap[r][c] > 0) {
+        const max = Math.max(...heatmap.flat());
+        const ratio = max > 0 ? heatmap[r][c]/max : 0;
+        if (ratio > 0.6) cell.classList.add('heatmap-high');
+        else if (ratio > 0.3) cell.classList.add('heatmap-mid');
+        else cell.classList.add('heatmap-low');
+      }
+    }
+  }
+}
+
+// 艦配置
+function canPlace(board, r, c, size, horiz) {
+  for (let i = 0; i < size; i++) {
+    const rr = r + (horiz ? 0 : i);
+    const cc = c + (horiz ? i : 0);
+    if (rr >= GRID || cc >= GRID) return false;
+    if (board[rr][cc]) return false;
+    // 隣接チェック
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const nr = rr+dr, nc = cc+dc;
+      if (nr>=0&&nr<GRID&&nc>=0&&nc<GRID&&board[nr][nc]) return false;
+    }
+  }
+  return true;
+}
+function placeOnBoard(board, r, c, size, horiz, val=1) {
+  for (let i = 0; i < size; i++) {
+    const rr = r + (horiz ? 0 : i);
+    const cc = c + (horiz ? i : 0);
+    board[rr][cc] = val;
+  }
+}
+function randomPlace() {
+  placedShips = [];
+  playerBoard = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  SHIPS.forEach((ship, idx) => {
+    let placed = false;
+    while (!placed) {
+      const h = Math.random() > 0.5;
+      const r = Math.floor(Math.random()*GRID);
+      const c = Math.floor(Math.random()*GRID);
+      if (canPlace(playerBoard, r, c, ship.size, h)) {
+        placeOnBoard(playerBoard, r, c, ship.size, h);
+        const cells = [];
+        for (let i = 0; i < ship.size; i++) cells.push([r+(h?0:i),c+(h?i:0)]);
+        placedShips.push({...ship, cells});
+        placed = true;
+      }
+    }
+  });
+  selectedShipIdx = SHIPS.length; // all placed
+  updateShipList();
+  renderPlayerBoard();
+  document.getElementById('btnStartBattle').disabled = false;
+}
+
+function buildShipList() {
+  const container = document.getElementById('shipList');
+  container.innerHTML = '';
+  SHIPS.forEach((ship, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'ship-btn w-full border border-blue-800 text-xs py-1 px-2 rounded text-left';
+    btn.id = `shipBtn-${idx}`;
+    btn.textContent = `${ship.emoji} ${ship.name}(${ship.size})`;
+    btn.onclick = () => selectShip(idx);
+    container.appendChild(btn);
+  });
+}
+
+function updateShipList() {
+  SHIPS.forEach((_, idx) => {
+    const btn = document.getElementById(`shipBtn-${idx}`);
+    if (!btn) return;
+    btn.className = 'ship-btn w-full border border-blue-800 text-xs py-1 px-2 rounded text-left';
+    const isPlaced = placedShips.some(s => s.name === SHIPS[idx].name);
+    if (isPlaced) btn.classList.add('placed');
+    else if (idx === selectedShipIdx) btn.classList.add('selected');
+  });
+  const allPlaced = placedShips.length >= SHIPS.length;
+  document.getElementById('btnStartBattle').disabled = !allPlaced;
+}
+
+function selectShip(idx) {
+  if (placedShips.some(s => s.name === SHIPS[idx].name)) return;
+  selectedShipIdx = idx;
+  updateShipList();
+}
+
+function toggleRotate() {
+  isHorizontal = !isHorizontal;
+  document.getElementById('btnRotate').textContent = isHorizontal ? '🔄 横向き' : '🔄 縦向き';
+}
+
+// プレイヤーグリッドクリック（配置フェーズ）
+function playerCellClick(r, c) {
+  if (phase !== 'place') return;
+  const idx = placedShips.findIndex(s => s.name === SHIPS[selectedShipIdx]?.name);
+  if (idx >= 0) return; // already placed
+  if (selectedShipIdx >= SHIPS.length) return;
+  const ship = SHIPS[selectedShipIdx];
+  if (!canPlace(playerBoard, r, c, ship.size, isHorizontal)) {
+    showMsg('そこには置けません', 'text-red-400'); return;
+  }
+  placeOnBoard(playerBoard, r, c, ship.size, isHorizontal);
+  const cells = [];
+  for (let i = 0; i < ship.size; i++) cells.push([r+(isHorizontal?0:i),c+(isHorizontal?i:0)]);
+  placedShips.push({...ship, cells});
+  // next unplaced
+  const next = SHIPS.findIndex((s,i) => i > selectedShipIdx && !placedShips.some(ps=>ps.name===s.name));
+  selectedShipIdx = next >= 0 ? next : SHIPS.length;
+  updateShipList();
+  renderPlayerBoard();
+}
+
+function startBattle() {
+  phase = 'battle';
+  playerTurn = true;
+  gameOver = false;
+  document.getElementById('placeControls').classList.add('hidden');
+  document.getElementById('battleControls').classList.remove('hidden');
+  document.getElementById('phaseLabel').textContent = '戦闘';
+  document.getElementById('turnLabel').textContent = 'あなたのターン';
+  // CPU配置
+  enemyBoard = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  playerPlacedShips = [];
+  SHIPS.forEach(ship => {
+    let placed = false;
+    while (!placed) {
+      const h = Math.random() > 0.5;
+      const r = Math.floor(Math.random()*GRID);
+      const c = Math.floor(Math.random()*GRID);
+      if (canPlace(enemyBoard, r, c, ship.size, h)) {
+        placeOnBoard(enemyBoard, r, c, ship.size, h);
+        const cells = [];
+        for (let i = 0; i < ship.size; i++) cells.push([r+(h?0:i),c+(h?i:0)]);
+        playerPlacedShips.push({...ship, cells});
+        placed = true;
+      }
+    }
+  });
+  computeHeatmap();
+  renderEnemyBoard();
+  showMsg('ゲーム開始！敵の海域を攻撃してください', 'text-cyan-400');
+}
+
+// ヒートマップ計算（確率ベース）
+let cpuHits = [], cpuMisses = [];
+let cpuQueue = []; // 確認すべきセル
+let cpuLastHit = null;
+let cpuHitChain = [];
+
+function computeHeatmap() {
+  heatmap = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  const untouched = (r,c) => playerHits[r][c] === 0;
+  SHIPS.forEach(ship => {
+    const size = ship.size;
+    // 横
+    for (let r=0;r<GRID;r++) for(let c=0;c<=GRID-size;c++) {
+      let ok = true;
+      for(let i=0;i<size;i++) if(!untouched(r,c+i)||playerHits[r][c+i]===2) {ok=false;break;}
+      if(ok) for(let i=0;i<size;i++) heatmap[r][c+i]++;
+    }
+    // 縦
+    for (let r=0;r<=GRID-size;r++) for(let c=0;c<GRID;c++) {
+      let ok = true;
+      for(let i=0;i<size;i++) if(!untouched(r+i,c)||playerHits[r+i][c]===2) {ok=false;break;}
+      if(ok) for(let i=0;i<size;i++) heatmap[r+i][c]++;
+    }
+  });
+  // 命中済みセルは0
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++) if(playerHits[r][c]!==0) heatmap[r][c]=0;
+}
+
+function toggleHeatmap() {
+  showHeat = document.getElementById('showHeat').checked;
+  computeHeatmap();
+  renderEnemyBoard();
+}
+
+// プレイヤー攻撃
+function enemyCellClick(r, c) {
+  if (phase !== 'battle' || !playerTurn || gameOver) return;
+  if (playerHits[r][c] !== 0) { showMsg('すでに攻撃済みです', 'text-yellow-400'); return; }
+  const hit = enemyBoard[r][c] === 1;
+  playerHits[r][c] = hit ? 1 : 2;
+  computeHeatmap();
+  renderEnemyBoard();
+
+  if (hit) {
+    showMsg('💥 命中！', 'text-red-400');
+    // 撃沈チェック
+    const sunk = playerPlacedShips.find(s => s.cells.every(([sr,sc])=>playerHits[sr][sc]===1));
+    if (sunk) {
+      sunk.cells.forEach(([sr,sc])=>{ getCell('enemyGrid',sr,sc).classList.add('sunk'); });
+      showMsg(`⚓ 撃沈！ ${sunk.emoji} ${sunk.name}`, 'text-orange-400');
+      const remaining = playerPlacedShips.filter(s=>!s.cells.every(([sr,sc])=>playerHits[sr][sc]===1)).length;
+      document.getElementById('enemyShips').textContent = remaining;
+      if (remaining === 0) { endGame('win'); return; }
+    }
+  } else {
+    showMsg('💧 ミス', 'text-blue-400');
+  }
+  playerTurn = false;
+  document.getElementById('turnLabel').textContent = 'CPUのターン...';
+  setTimeout(cpuAttack, 900);
+}
+
+// CPU AI（ヒートマップベース）
+function cpuAttack() {
+  if (gameOver) return;
+  let r, c;
+  if (cpuQueue.length > 0) {
+    [r, c] = cpuQueue.shift();
+    while (cpuQueue.length > 0 && enemyHits[r][c] !== 0) [r, c] = cpuQueue.shift();
+    if (enemyHits[r][c] !== 0) [r, c] = cpuBestCell();
+  } else {
+    [r, c] = cpuBestCell();
+  }
+  const hit = playerBoard[r][c] === 1;
+  enemyHits[r][c] = hit ? 1 : 2;
+  renderPlayerBoard();
+  if (hit) {
+    showMsg(`💥 被弾！ [${['A','B','C','D','E','F','G','H','I','J'][r]}${c+1}]`, 'text-orange-400');
+    cpuHitChain.push([r,c]);
+    // 周辺を優先
+    [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(([nr,nc])=>{
+      if(nr>=0&&nr<GRID&&nc>=0&&nc<GRID&&enemyHits[nr][nc]===0) cpuQueue.push([nr,nc]);
+    });
+    const sunk = placedShips.find(s => s.cells.every(([sr,sc])=>enemyHits[sr][sc]===1));
+    if (sunk) {
+      showMsg(`⚠️ ${sunk.emoji} ${sunk.name}が撃沈されました！`, 'text-red-500');
+      cpuQueue = []; cpuHitChain = [];
+      const remaining = placedShips.filter(s=>!s.cells.every(([sr,sc])=>enemyHits[sr][sc]===1)).length;
+      if (remaining === 0) { endGame('lose'); return; }
+    }
+  } else {
+    showMsg('🛡 防御成功', 'text-cyan-400');
+  }
+  playerTurn = true;
+  document.getElementById('turnLabel').textContent = 'あなたのターン';
+}
+
+function cpuBestCell() {
+  // ヒートマップで最高のセルを選ぶ
+  let best = -1, br = 0, bc = 0;
+  // CPU用ヒートマップ
+  const h = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  const untouched = (r,c) => enemyHits[r][c] === 0;
+  placedShips.forEach(ship => {
+    const size = ship.size;
+    if (ship.cells.every(([sr,sc])=>enemyHits[sr][sc]===1)) return; // already sunk
+    for(let r=0;r<GRID;r++) for(let c=0;c<=GRID-size;c++) {
+      let ok=true; for(let i=0;i<size;i++) if(!untouched(r,c+i)&&enemyHits[r][c+i]!==1){ok=false;break;}
+      if(ok) for(let i=0;i<size;i++) if(untouched(r,c+i)) h[r][c+i]++;
+    }
+    for(let r=0;r<=GRID-size;r++) for(let c=0;c<GRID;c++) {
+      let ok=true; for(let i=0;i<size;i++) if(!untouched(r+i,c)&&enemyHits[r+i][c]!==1){ok=false;break;}
+      if(ok) for(let i=0;i<size;i++) if(untouched(r+i,c)) h[r+i][c]++;
+    }
+  });
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++) {
+    if(enemyHits[r][c]===0 && h[r][c] > best) { best=h[r][c]; br=r; bc=c; }
+  }
+  if (best < 0) {
+    // fallback: random
+    const opts=[];
+    for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++) if(enemyHits[r][c]===0) opts.push([r,c]);
+    return opts[Math.floor(Math.random()*opts.length)];
+  }
+  return [br, bc];
+}
+
+function endGame(result) {
+  gameOver = true;
+  phase = 'over';
+  if (result === 'win') {
+    wins++; saveStats(); updateStats();
+    document.getElementById('modal').classList.remove('hidden');
+    document.getElementById('modalIcon').textContent = '🏆';
+    document.getElementById('modalTitle').textContent = '勝利！';
+    document.getElementById('modalTitle').className = 'text-2xl font-bold mb-2 text-green-400';
+    document.getElementById('modalMsg').textContent = 'CPU艦隊を全滅させました！';
+    // reveal enemy
+    playerPlacedShips.forEach(s=>s.cells.forEach(([r,c])=>{
+      const cell = getCell('enemyGrid',r,c);
+      if (!cell.classList.contains('hit')) cell.classList.add('reveal');
+    }));
+  } else {
+    losses++; saveStats(); updateStats();
+    document.getElementById('modal').classList.remove('hidden');
+    document.getElementById('modalIcon').textContent = '💀';
+    document.getElementById('modalTitle').textContent = '敗北...';
+    document.getElementById('modalTitle').className = 'text-2xl font-bold mb-2 text-red-400';
+    document.getElementById('modalMsg').textContent = '自軍艦隊が全滅しました。';
+  }
+}
+
+function newGame() {
+  phase = 'place';
+  playerTurn = true;
+  gameOver = false;
+  selectedShipIdx = 0;
+  isHorizontal = true;
+  placedShips = [];
+  playerPlacedShips = [];
+  cpuQueue = [];
+  cpuHitChain = [];
+  playerBoard = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  enemyBoard = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  playerHits = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  enemyHits = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  heatmap = Array.from({length:GRID},()=>Array(GRID).fill(0));
+  document.getElementById('modal').classList.add('hidden');
+  document.getElementById('placeControls').classList.remove('hidden');
+  document.getElementById('battleControls').classList.add('hidden');
+  document.getElementById('phaseLabel').textContent = '配置';
+  document.getElementById('enemyShips').textContent = '5';
+  document.getElementById('btnRotate').textContent = '🔄 横向き';
+  document.getElementById('showHeat').checked = false;
+  showHeat = false;
+  buildShipList();
+  updateShipList();
+  buildGrid('playerGrid', playerCellClick);
+  buildGrid('enemyGrid', enemyCellClick);
+  renderPlayerBoard();
+  renderEnemyBoard();
+  showMsg('艦を配置してください', 'text-cyan-400');
+}
+
+function showMsg(text, cls) {
+  const el = document.getElementById('messageArea');
+  el.textContent = text;
+  el.className = `text-center text-sm font-semibold mb-3 h-6 ${cls}`;
+}
+
+// 初期化
+newGame();
+</script>
+</body>
+</html>
